@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    {
+      "name": "imgui",
+      "features": [
+        "docking-experimental",
+        "dx11-binding",
+        "freetype",
+        "win32-binding"
+      ]
+    },
+    "spdlog"
+  ]
+}
