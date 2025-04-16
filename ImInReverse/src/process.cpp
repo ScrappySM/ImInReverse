@@ -82,8 +82,6 @@ public:
 };
 
 ProcessManager::ProcessManager() {
-	InitCOM();
-	StartListening();
 }
 
 ProcessManager::~ProcessManager() {

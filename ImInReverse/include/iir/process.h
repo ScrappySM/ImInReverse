@@ -34,6 +34,11 @@ namespace IIR {
 
 		void CloseProcess();
 
+		void Init() {
+			InitCOM();
+			StartListening();
+		}
+
 	private:
 		ProcessManager();
 		~ProcessManager();

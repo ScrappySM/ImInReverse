@@ -186,6 +186,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\iir\process.h" />
+    <ClInclude Include="include\iir\structure.h" />
     <ClInclude Include="include\widgets.h" />
     <ClInclude Include="include\windowbuilder.h" />
     <ClInclude Include="include\windowbuilder_imgui.h" />
