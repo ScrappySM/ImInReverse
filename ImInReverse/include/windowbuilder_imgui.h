@@ -16,13 +16,22 @@ public:
 		io.IniFilename = nullptr;									// Disable .ini file
 		ImGui::StyleColorsDark();
 
-		// Load the font
-		//io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Consola.ttf", 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic()); - ugly
-		//io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\SegoeUI.ttf", 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic()); - not monospace
-		//io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Consola.ttf", 16.0f, nullptr, io.Fonts->GetGlyphRangesDefault()); - ugly again, choose a different font
-		io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\CascadiaMono.ttf", 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic());
-
+		float baseFontSize = 16.0f; // 13.0f is the size of the default font. Change to the font size you use.
+		io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\CascadiaMono.ttf", baseFontSize, nullptr, io.Fonts->GetGlyphRangesCyrillic());
+		//io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Segoeui.ttf", baseFontSize, nullptr, io.Fonts->GetGlyphRangesCyrillic());
 		io.FontDefault = io.Fonts->Fonts.back();
+
+		float iconFontSize = baseFontSize * 2.5f / 3.0f; // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+
+		// Merge in icons from Lucide
+		static const ImWchar icons_ranges[] = { ICON_MIN_LC, ICON_MAX_16_LC, 0 };
+		ImFontConfig icons_config; 
+		icons_config.MergeMode = true; 
+		icons_config.PixelSnapH = true; 
+		icons_config.GlyphMinAdvanceX = iconFontSize;
+		icons_config.FontDataOwnedByAtlas = false;
+		icons_config.FontDataSize = sizeof(s_lucide_ttf);
+		io.Fonts->AddFontFromMemoryTTF((void*)s_lucide_ttf, sizeof(s_lucide_ttf), iconFontSize, &icons_config, icons_ranges);
 		io.Fonts->Build();
 
 		// ImInReverse style from ImThemes
@@ -58,6 +67,7 @@ public:
 		style.ColorButtonPosition = ImGuiDir_Right;
 		style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
 		style.SelectableTextAlign = ImVec2(0.0f, 0.0f);
+		style.IndentSpacing = 32.0f;
 
 		style.Colors[ImGuiCol_Text] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 		style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.4980392158031464f, 0.4980392158031464f, 0.4980392158031464f, 1.0f);

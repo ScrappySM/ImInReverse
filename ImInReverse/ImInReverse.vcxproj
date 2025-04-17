@@ -185,6 +185,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\font\IconsLucide.h" />
+    <ClInclude Include="include\font\IconsLucide.h_lucide.ttf.h" />
+    <ClInclude Include="include\iir\options.h" />
     <ClInclude Include="include\iir\process.h" />
     <ClInclude Include="include\iir\structure.h" />
     <ClInclude Include="include\widgets.h" />

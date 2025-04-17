@@ -12,7 +12,6 @@
 #pragma comment(lib, "wbemuuid.lib")
 
 namespace IIR {
-
 	struct Process {
 		std::string name;
 		DWORD pid;
@@ -28,6 +27,7 @@ namespace IIR {
 		bool OpenProcess(const Process& process) { return OpenProcess(process.pid); }
 		std::optional<Process>& GetSelectedProcess() { return selectedProcess; }
 		bool IsProcessSuspended();
+		HANDLE GetHandle() { return this->processHandle; }
 
 		void SuspendProcess();
 		void ResumeProcess();

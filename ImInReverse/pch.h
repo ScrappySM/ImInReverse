@@ -18,6 +18,10 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <imgui_internal.h>
+#include <imstb_textedit.h>
+
+#include <font/IconsLucide.h>
+#include <font/IconsLucide.h_lucide.ttf.h>
 
 #include <spdlog/spdlog.h>
 
