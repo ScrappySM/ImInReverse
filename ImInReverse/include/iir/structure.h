@@ -18,6 +18,10 @@ namespace IIR {
 		float f32;
 		double f64;
 		const char* str;
+		void* ptr;
+		DirectX::XMFLOAT2 vec2;
+		DirectX::XMFLOAT3 vec3;
+		bool boolean;
 	};
 
 	enum class FieldType {
@@ -32,6 +36,10 @@ namespace IIR {
 		f32,
 		f64,
 		str,
+		ptr,
+		boolean,
+		vec2,
+		vec3,
 		unk
 	};
 
@@ -42,6 +50,8 @@ namespace IIR {
 		FieldType fieldType = FieldType::unk;
 		size_t offset = 0;
 		int size = 8; // Size of field in bytes.
+		char name[32] = "unnamed";
+
 		//std::string display = ""; TODO: Caching
 	};
 
@@ -50,7 +60,11 @@ namespace IIR {
 			{ FieldType::unk, 0, 8 },
 			{ FieldType::unk, 8, 8 },
 			{ FieldType::unk, 16, 8 },
-			{ FieldType::unk, 24, 8 }
+			{ FieldType::unk, 24, 8 },
+			{ FieldType::unk, 32, 8 },
+			{ FieldType::unk, 40, 8 },
+			{ FieldType::unk, 48, 8 },
+			{ FieldType::unk, 56, 8 }
 		};
 	};
 
@@ -68,6 +82,20 @@ namespace IIR {
 			this->hUpdateThread = std::thread(&StructureManager::UpdateFunction, this);
 		}
 
+		// Standard mutex lock/unlock functions
+		void Lock() {
+			memMutex.lock();
+		}
+
+		void Unlock() {
+			memMutex.unlock();
+		}
+
+		// Returns reference to mutex for use with std::lock_guard
+		std::mutex& getMutex() {
+			return memMutex;
+		}
+
 		void SetBase(uintptr_t newBase) { this->baseAddr = newBase; }
 		uintptr_t GetBase() { return baseAddr; }
 		void SetName(std::string_view newName) { this->name = newName; }
@@ -75,7 +103,7 @@ namespace IIR {
 		size_t GetSize() { return this->size; }
 
 		MemoryData* GetFieldData(const Field& field) {
-			if (field.offset + sizeof(MemoryData) > mem.size()) return nullptr;
+			if (field.offset + field.size > mem.size()) return nullptr;
 			return reinterpret_cast<MemoryData*>(mem.data() + field.offset);
 		}
 
@@ -108,6 +136,7 @@ namespace IIR {
 				offset += byteCount;
 			}
 
+			std::lock_guard<std::mutex> Lock(memMutex);
 			size = offset;
 			mem.resize(size);
 		}
@@ -135,188 +164,219 @@ namespace IIR {
 			}
 
 			// Resize memory
+			std::lock_guard<std::mutex> Lock(memMutex);
 			size -= byteCount - remaining; // Subtract what we *actually* removed
 			mem.resize(size);
 		}
 
 		/// <summary>
-/// Splits a field into multiple subfields of the specified size.
-/// The original field is removed and replaced by new fields.
-/// </summary>
-/// <param name="field">The field to split.</param>
-/// <param name="splitSize">The size of each new subfield (in bytes).</param>
-/// <returns>True if the split was successful, false otherwise.</returns>
-		bool SplitField(const Field& field, int splitSize) {
-			if (splitSize <= 0) return false;
+		/// Creates a field of the specified size at the position of the selected field,
+		/// rearranging all affected fields as needed. Will split existing fields and
+		/// create new field boundaries to accommodate the target size.
+		/// </summary>
+		/// <param name="field">The field to operate from.</param>
+		/// <param name="targetSize">The target size for the new field.</param>
+		/// <returns>True if the operation was successful, false otherwise.</returns>
+		bool JoinOrSplit(const Field& field, int targetSize) {
+			if (targetSize <= 0) {
+				spdlog::error("JoinOrSplit failed: Target size must be greater than 0");
+				return false;
+			}
 
 			auto& fields = currentStructure.fields;
 			auto it = std::find_if(fields.begin(), fields.end(),
 				[&field](const Field& f) { return &f == &field || (f.offset == field.offset && f.size == field.size); });
 
-			if (it == fields.end()) return false;
+			if (it == fields.end()) {
+				spdlog::error("JoinOrSplit failed: Field not found in current structure");
+				return false;
+			}
+
+			// The starting offset where we want the new field
+			size_t startOffset = field.offset;
+			// The ending offset of the new field we want to create
+			size_t endOffset = startOffset + targetSize;
+
+			// Step 1: Find all fields that overlap with our target region
+			std::vector<Field*> overlappingFields;
+			for (auto& f : fields) {
+				if (f.offset < endOffset && f.offset + f.size > startOffset) {
+					overlappingFields.push_back(&f);
+				}
+			}
+
+			// Step 2: Create a copy of the fields vector to work with
+			std::vector<Field> newFields = fields;
+
+			// Step 3: Remove all overlapping fields from our working copy
+			for (auto* f : overlappingFields) {
+				auto removeIt = std::find_if(newFields.begin(), newFields.end(),
+					[f](const Field& field) { return field.offset == f->offset && field.size == f->size; });
+				if (removeIt != newFields.end()) {
+					newFields.erase(removeIt);
+				}
+			}
+
+			// Step 4: Handle any fields that need to be split at the start boundary
+			for (auto* f : overlappingFields) {
+				if (f->offset < startOffset && f->offset + f->size > startOffset) {
+					// Need to create a field for the part before our new field
+					int beforeSize = startOffset - f->offset;
+					if (beforeSize > 0) {
+						newFields.push_back(Field{ f->fieldType, f->offset, beforeSize });
+					}
+				}
+			}
+
+			// Step 5: Add our new field of the target size at the desired position
+			newFields.push_back(Field{ FieldType::unk, startOffset, targetSize });
+
+			// Step 6: Handle any fields that need to be split at the end boundary
+			for (auto* f : overlappingFields) {
+				if (f->offset < endOffset && f->offset + f->size > endOffset) {
+					// Need to create a field for the part after our new field
+					int afterSize = (f->offset + f->size) - endOffset;
+					if (afterSize > 0) {
+						newFields.push_back(Field{ f->fieldType, endOffset, afterSize });
+					}
+				}
+			}
+
+			// Step 7: Sort the new fields by offset to maintain the proper order
+			std::sort(newFields.begin(), newFields.end(),
+				[](const Field& a, const Field& b) { return a.offset < b.offset; });
+
+			// Step 8: Replace the fields in the structure with our modified set
+			fields = newFields;
+
+			{
+				std::lock_guard<std::mutex> Lock(memMutex);
+				size = CalcTotalSize();
+				mem.resize(size);
+			}
+
+			spdlog::debug("JoinOrSplit success: Created field of size {} at offset {:#x}",
+				targetSize, startOffset);
+			return true;
+		}
+
+		/// <summary>
+		/// Splits a field into multiple subfields of the specified size.
+		/// The original field is removed and replaced by new fields with unk type.
+		/// </summary>
+		/// <param name="field">The field to split.</param>
+		/// <param name="splitSize">The size of each new subfield (in bytes).</param>
+		/// <returns>True if the split was successful, false otherwise.</returns>
+		bool SplitField(const Field& field, int splitSize) {
+			if (splitSize <= 0) {
+				spdlog::error("Split failed: Split size must be greater than 0");
+				return false;
+			}
+
+			auto& fields = currentStructure.fields;
+			auto it = std::find_if(fields.begin(), fields.end(),
+				[&field](const Field& f) { return &f == &field || (f.offset == field.offset && f.size == field.size); });
+
+			if (it == fields.end()) {
+				spdlog::error("Split failed: Field not found in current structure");
+				return false;
+			}
+
+			if (field.size <= splitSize) {
+				spdlog::error("Split not performed: Field size <= split size");
+				return false;
+			}
 
 			size_t fieldIndex = std::distance(fields.begin(), it);
-			FieldType typeToUse = field.fieldType;
 			std::vector<Field> newFields;
 
 			size_t numSplits = field.size / splitSize;
 			size_t remaining = field.size % splitSize;
 			size_t offset = field.offset;
 
+			// Create new fields of unk type
 			for (size_t i = 0; i < numSplits; ++i) {
-				newFields.push_back(Field{ typeToUse, offset, splitSize });
+				newFields.push_back(Field{ FieldType::unk, offset, splitSize });
 				offset += splitSize;
 			}
 			if (remaining > 0) {
-				newFields.push_back(Field{ typeToUse, offset, static_cast<int>(remaining) });
+				newFields.push_back(Field{ FieldType::unk, offset, static_cast<int>(remaining) });
 			}
 
 			// Replace the old field with new fields
 			fields.erase(it);
 			fields.insert(fields.begin() + fieldIndex, newFields.begin(), newFields.end());
 
-			size = CalcTotalSize();
-			mem.resize(size);
+			{
+				std::lock_guard<std::mutex> Lock(memMutex);
+				size = CalcTotalSize();
+				mem.resize(size);
+			}
 
+			spdlog::debug("Split successful: Field split into {} parts", newFields.size());
 			return true;
 		}
 
 		/// <summary>
-		/// Joins a field with its immediately adjacent fields into a single field.
-		/// The fields to join are determined by their offsets and must be contiguous.
+		/// Joins contiguous fields into a single field regardless of type.
+		/// The resulting field will have unk type.
 		/// </summary>
 		/// <param name="field">The field to join with adjacent fields.</param>
 		/// <param name="numFields">Number of contiguous fields to join (including the given field).</param>
 		/// <returns>True if join was successful, false otherwise.</returns>
 		bool JoinFields(const Field& field, size_t numFields = 2) {
-			if (numFields < 2) return false;
+			if (numFields < 2) {
+				spdlog::error("Join failed: Must join at least 2 fields");
+				return false;
+			}
 
 			auto& fields = currentStructure.fields;
 			auto it = std::find_if(fields.begin(), fields.end(),
 				[&field](const Field& f) { return &f == &field || (f.offset == field.offset && f.size == field.size); });
 
-			if (it == fields.end()) return false;
+			if (it == fields.end()) {
+				spdlog::error("Join failed: Field not found in current structure");
+				return false;
+			}
 
 			size_t startIdx = std::distance(fields.begin(), it);
 
 			// Ensure there are enough fields after startIdx
-			if (startIdx + numFields > fields.size()) return false;
+			if (startIdx + numFields > fields.size()) {
+				spdlog::error("Join failed: Not enough fields to join");
+				return false;
+			}
 
-			// Check that fields are contiguous
+			// Check that fields are contiguous - ignore types completely
 			size_t expectedOffset = fields[startIdx].offset;
-			FieldType typeToUse = fields[startIdx].fieldType;
 			for (size_t i = 0; i < numFields; ++i) {
-				if (fields[startIdx + i].offset != expectedOffset || fields[startIdx + i].fieldType != typeToUse)
+				if (fields[startIdx + i].offset != expectedOffset) {
+					spdlog::error("Join failed: Fields are not contiguous");
 					return false;
+				}
 				expectedOffset += fields[startIdx + i].size;
 			}
 
-			// Compute properties for the new joined field
+			// Compute properties for the new joined field - always unk type
 			size_t offset = fields[startIdx].offset;
 			int totalSize = 0;
 			for (size_t i = 0; i < numFields; ++i)
 				totalSize += fields[startIdx + i].size;
 
-			Field joinedField{ typeToUse, offset, totalSize };
+			Field joinedField{ FieldType::unk, offset, totalSize };
 
 			// Replace the old fields with the new joined field
 			fields.erase(fields.begin() + startIdx, fields.begin() + startIdx + numFields);
 			fields.insert(fields.begin() + startIdx, joinedField);
 
-			size = CalcTotalSize();
-			mem.resize(size);
+			{
+				std::lock_guard<std::mutex> Lock(memMutex);
+				size = CalcTotalSize();
+				mem.resize(size);
+			}
 
+			spdlog::debug("Join successful: {} fields joined", numFields);
 			return true;
-		}
-
-		/// <summary>
-		/// If the field is smaller than targetSize, attempts to join with adjacent fields until the size matches targetSize exactly.
-		/// If the field is larger than targetSize, splits into multiple fields of targetSize.
-		/// Does not change the type.
-		/// </summary>
-		/// <param name="field">The field to operate on.</param>
-		/// <param name="targetSize">The target size to join/split to.</param>
-		/// <returns>True if a join or split was performed, false otherwise.</returns>
-		bool JoinOrSplit(const Field& field, int targetSize) {
-			if (targetSize <= 0) return false;
-
-			auto& fields = currentStructure.fields;
-			// Find the selected field
-			auto it = std::find_if(fields.begin(), fields.end(),
-				[&field](const Field& f) { return &f == &field || (f.offset == field.offset && f.size == field.size); });
-
-			if (it == fields.end())
-				return false;
-
-			// If field is bigger than target, just split it
-			if (field.size > targetSize)
-				return SplitField(field, targetSize);
-
-			// If already target size, do nothing
-			if (field.size == targetSize)
-				return false;
-
-			// Define the target range exactly where the selected field is
-			size_t rangeStart = field.offset;
-			size_t rangeEnd = rangeStart + targetSize;
-
-			// Step 1: Split any field that overlaps with our target range but isn't entirely inside it
-			std::vector<size_t> fieldsToSplit;
-			for (size_t i = 0; i < fields.size(); i++) {
-				auto& f = fields[i];
-				// Skip the selected field itself
-				if (&f == &field) continue;
-
-				// If field partially overlaps our target range, mark it for splitting
-				if (f.offset < rangeEnd && (f.offset + f.size) > rangeStart &&
-					(f.offset < rangeStart || (f.offset + f.size) > rangeEnd)) {
-					fieldsToSplit.push_back(i);
-				}
-			}
-
-			// Split the overlapping fields - starting from the end to avoid index shifting
-			for (auto it = fieldsToSplit.rbegin(); it != fieldsToSplit.rend(); ++it) {
-				size_t idx = *it;
-				if (idx >= fields.size()) continue; // Safety check
-
-				auto& f = fields[idx];
-				// If field starts before range and extends into it
-				if (f.offset < rangeStart && f.offset + f.size > rangeStart) {
-					SplitField(f, rangeStart - f.offset);
-				}
-				// Re-fetch fields after potential modification
-				// If field starts inside range and extends past it
-				for (auto& f : fields) {
-					if (f.offset < rangeEnd && f.offset >= rangeStart && f.offset + f.size > rangeEnd) {
-						SplitField(f, rangeEnd - f.offset);
-						break;
-					}
-				}
-			}
-
-			// Step 2: Find all fields inside the target range
-			std::vector<Field*> rangeFields;
-			for (auto& f : fields) {
-				if (f.offset >= rangeStart && f.offset + f.size <= rangeEnd) {
-					rangeFields.push_back(&f);
-				}
-			}
-
-			// Sort by offset
-			std::sort(rangeFields.begin(), rangeFields.end(),
-				[](const Field* a, const Field* b) { return a->offset < b->offset; });
-
-			// Step 3: Check they are contiguous and join them
-			if (rangeFields.size() > 0) {
-				// Check the first field starts at rangeStart
-				if (rangeFields[0]->offset != rangeStart)
-					return false;
-
-				// Join them
-				return JoinFields(*rangeFields[0], rangeFields.size());
-			}
-
-			return false;
 		}
 
 	private:
@@ -338,17 +398,27 @@ namespace IIR {
 		size_t size = 64;
 
 		std::vector<uint8_t> mem;
+		std::mutex memMutex;
 
 		void UpdateFunction() {
 			auto& pm = IIR::ProcessManager::GetInstance();
 
+			auto frequencyStartTime = std::chrono::steady_clock::now();
+			uint64_t iterationCount = 0;
+			const int reportIntervalSec = 5;
+
 			while (this->running) {
+				iterationCount++;
+				auto loopStartTime = std::chrono::steady_clock::now();
+
+				// Get process handle
 				auto handle = pm.GetHandle();
 				if (handle == nullptr) {
 					std::this_thread::sleep_for(std::chrono::milliseconds(100));
 					continue;
 				}
 
+				this->Lock();
 				SIZE_T sizeRead = 0;
 				BOOL success = ReadProcessMemory(
 					handle,
@@ -357,16 +427,59 @@ namespace IIR {
 					size,
 					&sizeRead
 				);
+				this->Unlock();
 
 				if (!success || sizeRead != size) {
 					DWORD errorCode = GetLastError();
-					spdlog::error("ReadProcessMemory failed (err: {}) — read {}/{} bytes", errorCode, sizeRead, size);
-					std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+					// Format the error code as a string
+					LPVOID lpMsgBuf;
+					FormatMessage(
+						FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+						NULL,
+						errorCode,
+						MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+						(LPTSTR)&lpMsgBuf,
+						0, NULL);
+					std::string errorMsg = static_cast<char*>(lpMsgBuf);
+					LocalFree(lpMsgBuf);
+
+					spdlog::error("Failed to read memory: {}", errorMsg);
+					std::this_thread::sleep_for(std::chrono::seconds(1));
 					continue;
 				}
 
-				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				auto now = std::chrono::steady_clock::now();
+				auto elapsedSec = std::chrono::duration_cast<std::chrono::seconds>(now - frequencyStartTime).count();
+
+				if (elapsedSec >= reportIntervalSec) {
+					double frequency = static_cast<double>(iterationCount) / elapsedSec;
+					double avgIterationTimeMs = (elapsedSec * 1000.0) / iterationCount;
+
+					spdlog::info("Updating {:.2f} iterations/sec", frequency);
+
+					// Reset counters
+					frequencyStartTime = now;
+					iterationCount = 0;
+				}
+
+				std::this_thread::sleep_for(std::chrono::nanoseconds(10));
 			}
+		}
+
+		// Helper function to get current time string
+		std::string getCurrentTimeString() {
+			auto now = std::chrono::system_clock::now();
+			auto time = std::chrono::system_clock::to_time_t(now);
+
+			// use localtime_s
+			tm localTime;
+			localtime_s(&localTime, &time);
+			std::ostringstream ss;
+			ss << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+			ss << "." << std::setfill('0') << std::setw(3) << (std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
+
+			return ss.str();
 		}
 
 		size_t CalcTotalSize() const {

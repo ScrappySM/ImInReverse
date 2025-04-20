@@ -13,6 +13,7 @@
 #include <comdef.h>
 
 #include <d3d11.h>
+#include <DirectXMath.h>
 
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -23,6 +24,8 @@
 #include <font/IconsLucide.h>
 #include <font/IconsLucide.h_lucide.ttf.h>
 
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/sink.h>
 #include <spdlog/spdlog.h>
 
 #include <functional>

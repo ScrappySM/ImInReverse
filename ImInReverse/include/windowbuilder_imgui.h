@@ -13,7 +13,7 @@ public:
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable Keyboard Controls
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;        // Enable Gamepad Controls
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;           // Enable Docking
-		io.IniFilename = nullptr;									// Disable .ini file
+		io.IniFilename = "ImInReverse.ini";									// Disable .ini file
 		ImGui::StyleColorsDark();
 
 		float baseFontSize = 16.0f; // 13.0f is the size of the default font. Change to the font size you use.
@@ -21,7 +21,7 @@ public:
 		//io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Segoeui.ttf", baseFontSize, nullptr, io.Fonts->GetGlyphRangesCyrillic());
 		io.FontDefault = io.Fonts->Fonts.back();
 
-		float iconFontSize = baseFontSize * 2.5f / 3.0f; // FontAwesome fonts need to have their sizes reduced by 2.0f/3.0f in order to align correctly
+		float iconFontSize = baseFontSize * 2.35f / 3.0f;
 
 		// Merge in icons from Lucide
 		static const ImWchar icons_ranges[] = { ICON_MIN_LC, ICON_MAX_16_LC, 0 };

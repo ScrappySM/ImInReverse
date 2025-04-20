@@ -48,24 +48,23 @@ public:
 			Process p{ name, (DWORD)vtPid.uintVal };
 
 			{
-				std::lock_guard<std::mutex> lock(manager->processMtx);
+				std::lock_guard<std::mutex> Lock(manager->processMtx);
 				if (wcscmp(vtClass.bstrVal, L"__InstanceCreationEvent") == 0) {
 					manager->processes.push_back(p);
-					spdlog::info("[+] Process created: {} (PID: {})", p.name, p.pid);
+					spdlog::debug("Process created: {} (PID: {})", p.name, p.pid);
 				} else if (wcscmp(vtClass.bstrVal, L"__InstanceDeletionEvent") == 0) {
 					manager->processes.erase(std::remove_if(manager->processes.begin(), manager->processes.end(), [&](const Process& proc) {
 						return proc.pid == p.pid;
 					}), manager->processes.end());
-					spdlog::info("[-] Process exited: {} (PID: {})", p.name, p.pid);
+					spdlog::debug("Process exited: {} (PID: {})", p.name, p.pid);
 
 					// if it was the selected process, close it and clear the selection
 					if (manager->selectedProcess && manager->selectedProcess->pid == p.pid) {
+						spdlog::info("Selected process exited, closing handle");
+
 						manager->CloseProcess();
 						manager->selectedProcess = std::nullopt;
-						spdlog::info("[-] Closed selected process: {} (PID: {})", p.name, p.pid);
 					}
-
-					// TODO: in-app notification about this.
 				}
 			}
 
@@ -160,9 +159,9 @@ void ProcessManager::PerformInitialScan() {
         Process p{ name, (DWORD)vtPid.uintVal };
 
         {
-            std::lock_guard<std::mutex> lock(processMtx);
+            std::lock_guard<std::mutex> Lock(processMtx);
             processes.push_back(p);
-			spdlog::info("[+] Process created: {} (PID: {})", p.name, p.pid);
+			spdlog::debug("Process created: {} (PID: {})", p.name, p.pid);
         }
 
         VariantClear(&vtName);
@@ -188,7 +187,7 @@ bool ProcessManager::OpenProcess(DWORD pid) {
 	}
 
 	// Store the selected process
-	std::lock_guard<std::mutex> lock(processMtx);
+	std::lock_guard<std::mutex> Lock(processMtx);
 	auto it = std::find_if(processes.begin(), processes.end(), [pid](const Process& p) {
 		return p.pid == pid;
 		});
@@ -198,7 +197,7 @@ bool ProcessManager::OpenProcess(DWORD pid) {
 	else {
 		selectedProcess = std::nullopt;
 	}
-	spdlog::info("Opened process with PID: {}", pid);
+	spdlog::debug("Opened process with PID: {}", pid);
 
 	return processHandle != nullptr;
 }
@@ -212,7 +211,7 @@ void ProcessManager::CloseProcess() {
 }
 
 const std::vector<Process>& ProcessManager::GetProcesses() {
-	std::lock_guard<std::mutex> lock(processMtx);
+	std::lock_guard<std::mutex> Lock(processMtx);
 	return processes;
 }
 
@@ -284,7 +283,7 @@ void ProcessManager::SuspendProcess() {
 		} while (Thread32Next(hThreadSnap, &te));
 	}
 	CloseHandle(hThreadSnap);
-	spdlog::info("Suspended process with PID: {}", selectedProcess->pid);
+	spdlog::debug("Suspended process with PID: {}", selectedProcess->pid);
 }
 
 void ProcessManager::ResumeProcess() {
@@ -309,5 +308,5 @@ void ProcessManager::ResumeProcess() {
 		} while (Thread32Next(hThreadSnap, &te));
 	}
 	CloseHandle(hThreadSnap);
-	spdlog::info("Resumed process with PID: {}", selectedProcess->pid);
+	spdlog::debug("Resumed process with PID: {}", selectedProcess->pid);
 }
