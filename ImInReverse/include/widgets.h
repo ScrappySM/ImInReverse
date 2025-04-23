@@ -411,7 +411,7 @@ namespace ImGui {
 
             toastQueue.emplace_back(message, level);
             auto& toast = toastQueue.back();
-            toast.startTime = ImGui::GetTime();
+            toast.startTime = (float)ImGui::GetTime();
             toast.isFading = false;
             toast.isVisible = true;
             toast.alpha = 1.0f; // Ensure full opacity to start
@@ -451,7 +451,7 @@ namespace ImGui {
 
             for (auto it = localToastQueue.rbegin(); it != localToastQueue.rend(); ++it) {
                 auto toast = *it;  // Work with a copy
-                float currentTime = ImGui::GetTime();
+                float currentTime = (float)ImGui::GetTime();
                 float elapsedTime = currentTime - toast.startTime;
 
                 // Check if toast should start fading

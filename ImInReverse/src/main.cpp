@@ -16,7 +16,8 @@ constexpr auto windowFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoRe
 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings |
 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoDocking;
 
-static IIR::Field* g_selectedField = nullptr;
+//static IIR::Field* g_selectedField = nullptr;
+static size_t fieldIndex = 0;
 
 bool IsProbablyPointer(HANDLE process, uintptr_t value) {
 	if (value < 0x10000 || value % sizeof(uintptr_t) != 0)
@@ -220,7 +221,9 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 	ImGui::BeginButtonGroup("Add");
 	for (int size : { 8, 16, 32, 64, 128 }) {
 		if (ImGui::GroupedButton(std::format(ICON_LC_PLUS " Add {}", size).c_str(), buttonWidth)) {
-			sm.AddBytes(size);
+			sm.Lock();
+			sm.structure.AddFields(size / 8);
+			sm.Unlock();
 		}
 	}
 	bool openAddN = false;
@@ -245,7 +248,7 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 		if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
 			try {
 				int size = std::stoi(sizeBuf);
-				sm.AddBytes(size);
+				//sm.AddBytes(size);
 			}
 			catch (std::exception& e) {
 				spdlog::error("{}", e.what());
@@ -259,10 +262,10 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 	}
 
 	constexpr float castWidth = 94.0f;
-	auto CastButton = [&](const char* label, size_t size, IIR::FieldType type) {
+	auto CastButton = [&](const char* label, int size, IIR::FieldType type) {
 		if (ImGui::GroupedButton(label, castWidth)) {
-			sm.JoinOrSplit(*g_selectedField, size);
-			g_selectedField->fieldType = type;
+			sm.structure.ResizeField(fieldIndex, size);
+			sm.structure.fields[fieldIndex].fieldType = type;
 		}
 	};
 
@@ -286,8 +289,8 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 	CastButton(ICON_LC_HASH " As f64", 8, IIR::FieldType::f64);
 	CastButton(ICON_LC_HASH " As bool", 1, IIR::FieldType::boolean);
 	CastButton(ICON_LC_HASH " As char*", sizeof(char*), IIR::FieldType::str);
-	CastButton(ICON_LC_HASH " As vec2", sizeof(DirectX::XMFLOAT2), IIR::FieldType::vec2);
-	CastButton(ICON_LC_HASH " As vec3", sizeof(DirectX::XMFLOAT3), IIR::FieldType::vec3);
+	//CastButton(ICON_LC_HASH " As vec2", sizeof(DirectX::XMFLOAT2), IIR::FieldType::vec2);
+	//CastButton(ICON_LC_HASH " As vec3", sizeof(DirectX::XMFLOAT3), IIR::FieldType::vec3);
 	CastButton(ICON_LC_HASH " As ptr", sizeof(void*), IIR::FieldType::ptr);
 	ImGui::EndButtonGroup();
 
@@ -300,10 +303,12 @@ const char* GetFieldTypeString(IIR::FieldType type);
 void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsManager& om, IIR::ProcessManager& pm) {
 	ImGui::BeginChild("##MemoryPane");
 
+	auto& structure = sm.structure;
+
 	{ /* First line, controls */
-		bool selected = g_selectedField == nullptr;
+		bool selected = fieldIndex == -1;
 		if (ImGui::BeginSelectableRow("##ControlLine", selected)) {
-			g_selectedField = nullptr;
+			fieldIndex = -1;
 		}
 
 		ImGui::PushStyleColor(ImGuiCol_Text, om.offsetColour);
@@ -321,12 +326,12 @@ void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsMan
 					size_t ptr = std::stoll(&addressBuf[1], nullptr, 16);
 					HMODULE hMods[1024]; DWORD cbNeeded;
 					if (EnumProcessModulesEx(IIR::ProcessManager::GetInstance().GetHandle(), hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL)) {
-						sm.SetBase(ptr + reinterpret_cast<uintptr_t>(hMods[0]));
+						structure.baseAddr = ptr + reinterpret_cast<uintptr_t>(hMods[0]);
 					}
 				}
 				else {
 					size_t ptr = std::stoll(addressBuf, nullptr, 16);
-					sm.SetBase(ptr);
+					structure.baseAddr = ptr;
 				}
 			}
 			catch (std::exception e) {
@@ -342,15 +347,15 @@ void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsMan
 		ImGui::InlineEditText("##ClassNameEditor", className, sizeof(className));
 		ImGui::SameLine();
 
-		auto size = sm.GetSize();
+		auto size = structure.size;
 		ImGui::TextColored(om.numberColour, "[%zu %s 0x%zX]", size, ICON_LC_ARROW_LEFT_RIGHT, size);
 
 		ImGui::EndSelectableRow();
 	}
 
 	{ /* Fields */
-		auto& fields = sm.GetFields();
-		auto base = sm.GetBase();
+		auto& fields = structure.fields;
+		auto base = structure.baseAddr;
 		ImGui::Indent();
 
 		ImGuiListClipper fieldsClipper;
@@ -358,64 +363,127 @@ void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsMan
 		while (fieldsClipper.Step()) {
 			for (int i = fieldsClipper.DisplayStart; i < fieldsClipper.DisplayEnd; ++i) {
 				auto& field = fields[i];
-				auto data = sm.GetFieldData(field);
+				auto data = structure.GetFieldData(field);
 
 				ImGui::PushID(&field);
-				bool selected = g_selectedField == &field;
-				if (ImGui::BeginSelectableRow(std::format("##{}@{}", field.name, field.offset).c_str(), selected)) {
-					g_selectedField = &field;
+				bool selected = fieldIndex == i;
+				std::string rowID = std::format("##{}@{}", field.name, field.offset).c_str();
+				if (ImGui::BeginSelectableRow(rowID.c_str(), selected)) {
+					fieldIndex = i;
 				}
 
 				ImGui::ColoredSelectableText(om.offsetColour, "##fieldOffset", "%04zX", field.offset);
 				ImGui::SameLine();
 				ImGui::ColoredSelectableText(om.addressColour, "##fieldAddress", "%016zX", field.offset + base);
 
-				// Format data as ascii as efficiently as possible, `.`s for non-printable
-				ImGui::SameLine();
-				{
-					int asciiLen = std::min(field.size, 32);
-					char asciiBytes[33] = {};
-					for (int j = 0; j < asciiLen; ++j) {
-						unsigned char c = ((const unsigned char*)data)[j];
-						asciiBytes[j] = (c >= 32 && c <= 126) ? c : '.';
-					}
-					asciiBytes[asciiLen] = '\0';
-					ImGui::ColoredSelectableText(om.typeColour, "##fieldAscii", "%s", asciiBytes);
-				}
-				ImGui::SameLine();
-				ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-				{
-					int hexLen = std::min(field.size, 32);
-					std::string hexBytes;
-					hexBytes.reserve(3 * hexLen + 1);
-					for (int j = 0; j < hexLen; ++j) {
-						char buf[4];
-						snprintf(buf, sizeof(buf), "%02X ", ((const unsigned char*)data)[j]);
-						hexBytes += buf;
-					}
-					ImGui::ColoredSelectableText(om.textColour, "##fieldHex", "%s", hexBytes.c_str());
-				}
-				ImGui::SameLine();
-
-				if (field.size == 8)
-					ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%lld 0x%llX)", data->i64, data->u64);
-				else if (field.size == 4)
-					ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i32, data->u32);
-				else if (field.size == 2)
-					ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i16, data->u16);
-				else if (field.size == 1)
-					ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(% d 0x % X)", data->i8, data->u8);
-				else
-					ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d bytes)", field.size);
-				ImGui::PopStyleVar();
-
-				ImGui::SameLine();
-
-				if (field.size == sizeof(uintptr_t) && IsProbablyPointer(pm.GetHandle(), data->u64)) {
+				if (field.fieldType == IIR::FieldType::unk) {
+					// Format data as ascii as efficiently as possible, `.`s for non-printable
 					ImGui::SameLine();
-					ImGui::TextColored(om.offsetColour, "->");
+					{
+						int asciiLen = std::min(field.size, 32);
+						char asciiBytes[33] = {};
+						for (int j = 0; j < asciiLen; ++j) {
+							unsigned char c = ((const unsigned char*)data)[j];
+							asciiBytes[j] = (c >= 32 && c <= 126) ? c : '.';
+						}
+						asciiBytes[asciiLen] = '\0';
+						ImGui::ColoredSelectableText(om.typeColour, "##fieldAscii", "%s", asciiBytes);
+					}
 					ImGui::SameLine();
-					ImGui::ColoredSelectableText(om.offsetColour, "##fieldType", "%llX", data->u64);
+					ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+					{
+						int hexLen = std::min(field.size, 32);
+						std::string hexBytes;
+						hexBytes.reserve(3 * hexLen + 1);
+						for (int j = 0; j < hexLen; ++j) {
+							char buf[4];
+							snprintf(buf, sizeof(buf), "%02X ", ((const unsigned char*)data)[j]);
+							hexBytes += buf;
+						}
+						ImGui::ColoredSelectableText(om.textColour, "##fieldHex", "%s", hexBytes.c_str());
+					}
+					ImGui::SameLine();
+
+					if (field.size == 8)
+						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%lld 0x%llX)", data->i64, data->u64);
+					else if (field.size == 4)
+						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i32, data->u32);
+					else if (field.size == 2)
+						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i16, data->u16);
+					else if (field.size == 1)
+						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i8, data->u8);
+					else
+						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d bytes)", field.size);
+					ImGui::PopStyleVar();
+
+					ImGui::SameLine();
+
+					if (field.size == sizeof(uintptr_t) && IsProbablyPointer(pm.GetHandle(), data->u64)) {
+						ImGui::SameLine();
+						ImGui::TextColored(om.offsetColour, "->");
+						ImGui::SameLine();
+						ImGui::ColoredSelectableText(om.offsetColour, "##fieldPointer", "%llX", data->u64);
+					}
+				}
+				else {
+					ImGui::SameLine();
+					ImGui::ColoredSelectableText(om.typeColour, "##fieldType", "%s", GetFieldTypeString(field.fieldType));
+					ImGui::SameLine();
+					std::string rowID = std::format("##{}", i);
+					ImGui::InlineEditText(rowID.c_str(), field.name, sizeof(field.name));
+					ImGui::SameLine();
+					ImGui::TextColored(om.typeColour, "=");
+					ImGui::SameLine();
+					switch (field.fieldType) {
+					case IIR::FieldType::boolean:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%s", data->boolean ? "true" : "false");
+						break;
+					case IIR::FieldType::u8:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%u", data->u8);
+						break;
+					case IIR::FieldType::u16:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%hu", data->u16);
+						break;
+					case IIR::FieldType::u32:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%u", data->u32);
+						break;
+					case IIR::FieldType::u64:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%llu", data->u64);
+						break;
+					case IIR::FieldType::i8:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%d", data->i8);
+						break;
+					case IIR::FieldType::i16:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%hd", data->i16);
+						break;
+					case IIR::FieldType::i32:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%d", data->i32);
+						break;
+					case IIR::FieldType::i64:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%lld", data->i64);
+						break;
+					case IIR::FieldType::f32:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%.3f", data->f32);
+						break;
+					case IIR::FieldType::f64:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%.6f", data->f64);
+						break;
+					case IIR::FieldType::str:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%s", data->str);
+						break;
+					case IIR::FieldType::ptr:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "0x%p", (void*)data->ptr);
+						break;
+					case IIR::FieldType::vec2:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "X: %.3f, Y: %.3f", data->vec2.x, data->vec2.y);
+						break;
+					case IIR::FieldType::vec3:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "X: %.3f, Y: %.3f, Z: %.3f", data->vec3.x, data->vec3.y, data->vec3.z);
+						break;
+					default:
+						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "<Unknown Type>");
+						break;
+					}
 				}
 
 				ImGui::PopID();
@@ -424,6 +492,11 @@ void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsMan
 			}
 		}
 		fieldsClipper.End();
+
+		ImGui::BeginDisabled();
+		auto& lastField = fields.back();
+		ImGui::ColoredSelectableText(om.offsetColour, "##fieldOffsetEnd", "%04zX (end)", lastField.offset + (size_t)lastField.size);
+		ImGui::EndDisabled();
 
 		ImGui::Unindent();
 	}
@@ -489,8 +562,8 @@ int main(int argc, char* argv[]) {
 
 	auto& pm = IIR::ProcessManager::GetInstance();
 	auto& sm = IIR::StructureManager::GetInstance();
-	pm.Init();
 	sm.Init();
+	pm.Init();
 
 	auto window = WindowBuilder()
 		.Name("ImInReverse", "ImInReverseClass")
