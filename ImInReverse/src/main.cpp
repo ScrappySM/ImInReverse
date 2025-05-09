@@ -45,6 +45,7 @@ void MenuBar(const Window& window, IIR::ProcessManager& pm) {
 	bool openAbout = false;
 	bool openProcPicker = false;
 	bool openSettings = false;
+	bool openNewStructure = false;
 
 	if (ImGui::BeginMainMenuBar()) {
 		if (ImGui::BeginMenu("File")) {
@@ -82,7 +83,7 @@ void MenuBar(const Window& window, IIR::ProcessManager& pm) {
 		}
 
 		if (ImGui::BeginMenu("Memory")) {
-			ImGui::Text("TODO");
+			if (ImGui::Button("New structure")) openNewStructure = true;
 
 			ImGui::EndMenu();
 		}
@@ -111,6 +112,10 @@ void MenuBar(const Window& window, IIR::ProcessManager& pm) {
 	}
 	else if (openSettings) {
 		ImGui::OpenPopup("Settings");
+		timeSinceOpened = std::chrono::high_resolution_clock::now();
+	}
+	else if (openNewStructure) {
+		ImGui::OpenPopup("New Structure");
 		timeSinceOpened = std::chrono::high_resolution_clock::now();
 	}
 
@@ -202,6 +207,28 @@ void MenuBar(const Window& window, IIR::ProcessManager& pm) {
 		ImGui::EndPopup();
 	}
 
+	ImGui::SetNextWindowPos(ImVec2((float)window.width / 2.0f, (float)window.height / 2.0f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	if (ImGui::BeginPopupModal("New Structure", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+		ImRect windowRect = ImGui::GetCurrentWindow()->Rect();
+		auto& om = IIR::OptionsManager::GetInstance();
+
+		static char sizeBuf[128] = "";
+		if (ImGui::IsWindowAppearing()) {
+			ImGui::SetKeyboardFocusHere();
+		}
+
+		ImGui::PushID("SearchInput");
+		bool searchActive = ImGui::InputText("Search", sizeBuf, sizeof(sizeBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+		bool isSearchFocused = ImGui::IsItemActive();
+		ImGui::PopID();
+
+		if (ImGui::Button("OK") || ImGui::IsKeyPressed(ImGuiKey_Escape) || (ImGui::IsMouseClicked(0) && !ImGui::IsMouseHoveringRect(windowRect.Min, windowRect.Max) && timeSinceOpened + std::chrono::milliseconds(500) < std::chrono::high_resolution_clock::now())) {
+			ImGui::CloseCurrentPopup();
+		}
+
+		ImGui::EndPopup();
+	}
+
 	if (!pm.GetSelectedProcess().has_value()) {
 		SetWindowTextA(window.hWnd, "ImInReverse - No Process");
 	}
@@ -222,7 +249,7 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 	for (int size : { 8, 16, 32, 64, 128 }) {
 		if (ImGui::GroupedButton(std::format(ICON_LC_PLUS " Add {}", size).c_str(), buttonWidth)) {
 			sm.Lock();
-			sm.structure.AddFields(size / 8);
+			sm.structure.second.AddFields(size / 8);
 			sm.Unlock();
 		}
 	}
@@ -249,6 +276,7 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 			try {
 				int size = std::stoi(sizeBuf);
 				//sm.AddBytes(size);
+				sm.structure.second.AddFields(size);
 			}
 			catch (std::exception& e) {
 				spdlog::error("{}", e.what());
@@ -264,8 +292,8 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 	constexpr float castWidth = 94.0f;
 	auto CastButton = [&](const char* label, int size, IIR::FieldType type) {
 		if (ImGui::GroupedButton(label, castWidth)) {
-			sm.structure.ResizeField(fieldIndex, size);
-			sm.structure.fields[fieldIndex].fieldType = type;
+			sm.structure.second.ResizeField(fieldIndex, size);
+			sm.structure.second.fields[fieldIndex].fieldType = type;
 		}
 	};
 
@@ -299,231 +327,137 @@ void Ribbon(const Window& window, IIR::StructureManager& sm) {
 	ImGui::PopStyleColor();
 }
 
-const char* GetFieldTypeString(IIR::FieldType type);
+auto GetFieldTypeString(IIR::FieldType fieldType) -> std::string_view {
+   switch (fieldType) {
+       case IIR::FieldType::i8: return "i8";
+       case IIR::FieldType::u8: return "u8";
+       case IIR::FieldType::i16: return "i16";
+       case IIR::FieldType::u16: return "u16";
+       case IIR::FieldType::i32: return "i32";
+       case IIR::FieldType::u32: return "u32";
+       case IIR::FieldType::i64: return "i64";
+       case IIR::FieldType::u64: return "u64";
+       case IIR::FieldType::f32: return "f32";
+       case IIR::FieldType::f64: return "f64";
+       case IIR::FieldType::str: return "char*";
+       case IIR::FieldType::ptr: return "ptr";
+       case IIR::FieldType::boolean: return "bool";
+       case IIR::FieldType::vec2: return "vec2";
+       case IIR::FieldType::vec3: return "vec3";
+       default: return "unk";
+   }
+}
+
+void RenderFields(const IIR::Structure& structure) {
+	ImGui::Indent();
+	auto& om = IIR::OptionsManager::GetInstance();
+
+	/*ImGuiListClipper lc;
+	lc.Begin((int)structure.fields.size());*/
+	//while (lc.Step()) {
+	{
+		//for (auto& f : structure.fields) {
+		for (int i = 0; i < structure.fields.size(); i++) {
+			ImGui::PushID(i);
+			ImGui::BeginGroup();
+
+			ImGui::SetNextItemAllowOverlap();
+			bool open = ImGui::TreeNodeEx("##Ptr");
+			if (open) ImGui::TreePop();
+
+			ImGui::SameLine();
+
+			ImGui::SetNextItemAllowOverlap();
+			if (ImGui::SelectableRow("##ControlLine", fieldIndex == i))
+				fieldIndex = i;
+
+			ImGui::SameLine();
+			ImGui::Text("Hi");
+
+			// TODO: Content
+
+			ImGui::EndGroup();
+
+			if (open) {
+				ImGui::Indent();
+				RenderFields(structure);
+				ImGui::Unindent();
+			}
+
+			ImGui::PopID();
+		}
+	}
+	ImGui::Unindent();
+}
+
 void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsManager& om, IIR::ProcessManager& pm) {
 	ImGui::BeginChild("##MemoryPane");
 
-	auto& structure = sm.structure;
+	auto& pair = sm.structure;  // Direct reference to structure
 
-	{ /* First line, controls */
-		bool selected = fieldIndex == -1;
-		if (ImGui::BeginSelectableRow("##ControlLine", selected)) {
-			fieldIndex = -1;
-		}
+	// === First Line: Controls ===
+	if (ImGui::SelectableRow("##ControlLine", fieldIndex == -1))
+		fieldIndex = -1;
+	ImGui::SameLine();
 
-		ImGui::PushStyleColor(ImGuiCol_Text, om.offsetColour);
-		ImGui::Text(ICON_LC_SHAPES);
-		ImGui::SameLine();
-		static char addressBuf[64] = "0";
-		if (ImGui::InlineEditText("##AddressEditor", addressBuf, sizeof(addressBuf))) {
-			for (size_t i = 0; i < strlen(addressBuf); ++i) {
-				addressBuf[i] = std::toupper(static_cast<unsigned char>(addressBuf[i]));
-			}
+	ImGui::PushStyleColor(ImGuiCol_Text, om.offsetColour);
+	ImGui::Text(ICON_LC_SHAPES);
+	ImGui::SameLine();
 
-			// Extremely basic parser for now, just try to convert
-			try {
-				if (addressBuf[0] == '+') {
-					size_t ptr = std::stoll(&addressBuf[1], nullptr, 16);
-					HMODULE hMods[1024]; DWORD cbNeeded;
-					if (EnumProcessModulesEx(IIR::ProcessManager::GetInstance().GetHandle(), hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL)) {
-						structure.baseAddr = ptr + reinterpret_cast<uintptr_t>(hMods[0]);
-					}
+	static char addressBuf[64] = "0";
+	if (ImGui::InlineEditText("##AddressEditor", addressBuf, sizeof(addressBuf))) {
+		for (size_t i = 0; i < strlen(addressBuf); ++i)
+			addressBuf[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(addressBuf[i])));
+
+		try {
+			if (addressBuf[0] == '+') {
+				size_t offset = std::stoull(&addressBuf[1], nullptr, 16);
+				HMODULE hMods[1024]; DWORD cbNeeded;
+				if (EnumProcessModulesEx(pm.GetHandle(), hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL)) {
+					// Directly modifying the structure's baseAddr
+					pair.second.baseAddr = reinterpret_cast<uintptr_t>(hMods[0]);
+				} else {
+					spdlog::error("Failed to enumerate process modules.");
 				}
-				else {
-					size_t ptr = std::stoll(addressBuf, nullptr, 16);
-					structure.baseAddr = ptr;
-				}
+			} else {
+				size_t ptr = std::stoull(addressBuf, nullptr, 16);
+				// Directly modifying the structure's baseAddr
+				pair.second.baseAddr = ptr;
 			}
-			catch (std::exception e) {
-				spdlog::error("{}", e.what());
-			}
+		} catch (const std::exception& e) {
+			spdlog::error("Invalid address input: {}", e.what());
 		}
-		ImGui::PopStyleColor();
-		ImGui::SameLine();
-		ImGui::TextColored(om.typeColour, "Class");
-		ImGui::SameLine();
-
-		static char className[64] = "Unnamed";
-		ImGui::InlineEditText("##ClassNameEditor", className, sizeof(className));
-		ImGui::SameLine();
-
-		auto size = structure.size;
-		ImGui::TextColored(om.numberColour, "[%zu %s 0x%zX]", size, ICON_LC_ARROW_LEFT_RIGHT, size);
-
-		ImGui::EndSelectableRow();
 	}
+	ImGui::PopStyleColor();
 
-	{ /* Fields */
-		auto& fields = structure.fields;
-		auto base = structure.baseAddr;
-		ImGui::Indent();
+	ImGui::SameLine();
+	ImGui::TextColored(om.typeColour, "Class");
+	ImGui::SameLine();
 
-		ImGuiListClipper fieldsClipper;
-		fieldsClipper.Begin(static_cast<int>(fields.size()));
-		while (fieldsClipper.Step()) {
-			for (int i = fieldsClipper.DisplayStart; i < fieldsClipper.DisplayEnd; ++i) {
-				auto& field = fields[i];
-				auto data = structure.GetFieldData(field);
-
-				ImGui::PushID(&field);
-				bool selected = fieldIndex == i;
-				std::string rowID = std::format("##{}@{}", field.name, field.offset).c_str();
-				if (ImGui::BeginSelectableRow(rowID.c_str(), selected)) {
-					fieldIndex = i;
-				}
-
-				ImGui::ColoredSelectableText(om.offsetColour, "##fieldOffset", "%04zX", field.offset);
-				ImGui::SameLine();
-				ImGui::ColoredSelectableText(om.addressColour, "##fieldAddress", "%016zX", field.offset + base);
-
-				if (field.fieldType == IIR::FieldType::unk) {
-					// Format data as ascii as efficiently as possible, `.`s for non-printable
-					ImGui::SameLine();
-					{
-						int asciiLen = std::min(field.size, 32);
-						char asciiBytes[33] = {};
-						for (int j = 0; j < asciiLen; ++j) {
-							unsigned char c = ((const unsigned char*)data)[j];
-							asciiBytes[j] = (c >= 32 && c <= 126) ? c : '.';
-						}
-						asciiBytes[asciiLen] = '\0';
-						ImGui::ColoredSelectableText(om.typeColour, "##fieldAscii", "%s", asciiBytes);
-					}
-					ImGui::SameLine();
-					ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-					{
-						int hexLen = std::min(field.size, 32);
-						std::string hexBytes;
-						hexBytes.reserve(3 * hexLen + 1);
-						for (int j = 0; j < hexLen; ++j) {
-							char buf[4];
-							snprintf(buf, sizeof(buf), "%02X ", ((const unsigned char*)data)[j]);
-							hexBytes += buf;
-						}
-						ImGui::ColoredSelectableText(om.textColour, "##fieldHex", "%s", hexBytes.c_str());
-					}
-					ImGui::SameLine();
-
-					if (field.size == 8)
-						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%lld 0x%llX)", data->i64, data->u64);
-					else if (field.size == 4)
-						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i32, data->u32);
-					else if (field.size == 2)
-						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i16, data->u16);
-					else if (field.size == 1)
-						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d 0x%X)", data->i8, data->u8);
-					else
-						ImGui::ColoredSelectableText(om.numberColour, "##fieldData", "(%d bytes)", field.size);
-					ImGui::PopStyleVar();
-
-					ImGui::SameLine();
-
-					if (field.size == sizeof(uintptr_t) && IsProbablyPointer(pm.GetHandle(), data->u64)) {
-						ImGui::SameLine();
-						ImGui::TextColored(om.offsetColour, "->");
-						ImGui::SameLine();
-						ImGui::ColoredSelectableText(om.offsetColour, "##fieldPointer", "%llX", data->u64);
-					}
-				}
-				else {
-					ImGui::SameLine();
-					ImGui::ColoredSelectableText(om.typeColour, "##fieldType", "%s", GetFieldTypeString(field.fieldType));
-					ImGui::SameLine();
-					std::string rowID = std::format("##{}", i);
-					ImGui::InlineEditText(rowID.c_str(), field.name, sizeof(field.name));
-					ImGui::SameLine();
-					ImGui::TextColored(om.typeColour, "=");
-					ImGui::SameLine();
-					switch (field.fieldType) {
-					case IIR::FieldType::boolean:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%s", data->boolean ? "true" : "false");
-						break;
-					case IIR::FieldType::u8:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%u", data->u8);
-						break;
-					case IIR::FieldType::u16:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%hu", data->u16);
-						break;
-					case IIR::FieldType::u32:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%u", data->u32);
-						break;
-					case IIR::FieldType::u64:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%llu", data->u64);
-						break;
-					case IIR::FieldType::i8:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%d", data->i8);
-						break;
-					case IIR::FieldType::i16:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%hd", data->i16);
-						break;
-					case IIR::FieldType::i32:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%d", data->i32);
-						break;
-					case IIR::FieldType::i64:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%lld", data->i64);
-						break;
-					case IIR::FieldType::f32:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%.3f", data->f32);
-						break;
-					case IIR::FieldType::f64:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%.6f", data->f64);
-						break;
-					case IIR::FieldType::str:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "%s", data->str);
-						break;
-					case IIR::FieldType::ptr:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "0x%p", (void*)data->ptr);
-						break;
-					case IIR::FieldType::vec2:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "X: %.3f, Y: %.3f", data->vec2.x, data->vec2.y);
-						break;
-					case IIR::FieldType::vec3:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "X: %.3f, Y: %.3f, Z: %.3f", data->vec3.x, data->vec3.y, data->vec3.z);
-						break;
-					default:
-						ImGui::ColoredSelectableText(om.numberColour, "##valueText", "<Unknown Type>");
-						break;
-					}
-				}
-
-				ImGui::PopID();
-
-				ImGui::EndSelectableRow();
-			}
+	static char classNameBuf[64] = "Unnamed";
+	ImGui::PushStyleColor(ImGuiCol_Text, om.nameColour);
+	if (ImGui::InlineEditText("##ClassNameEditor", classNameBuf, sizeof(classNameBuf))) {
+		// Find and rename class
+		auto it = sm.structures.find(pair.first);
+		if (it != sm.structures.end()) {
+			// Insert new entry with the new class name
+			sm.structures[classNameBuf] = std::move(it->second);
+			// Erase the old class name
+			sm.structures.erase(pair.first);
+			// Update sm.structure reference
+			sm.structure = *sm.structures.find(classNameBuf);
 		}
-		fieldsClipper.End();
-
-		ImGui::BeginDisabled();
-		auto& lastField = fields.back();
-		ImGui::ColoredSelectableText(om.offsetColour, "##fieldOffsetEnd", "%04zX (end)", lastField.offset + (size_t)lastField.size);
-		ImGui::EndDisabled();
-
-		ImGui::Unindent();
 	}
+	ImGui::PopStyleColor();
+
+	ImGui::SameLine();
+	auto size = pair.second.size;
+	ImGui::TextColored(om.numberColour, "[%zu %s 0x%zX]", size, ICON_LC_ARROW_LEFT_RIGHT, size);
+
+	// === Fields ===
+	RenderFields(pair.second);
 
 	ImGui::EndChild();
-}
-
-// Helper function to get the string representation of a field type
-const char* GetFieldTypeString(IIR::FieldType type) {
-	switch (type) {
-	case IIR::FieldType::i8: return "i8";
-	case IIR::FieldType::u8: return "u8";
-	case IIR::FieldType::i16: return "i16";
-	case IIR::FieldType::u16: return "u16";
-	case IIR::FieldType::i32: return "i32";
-	case IIR::FieldType::u32: return "u32";
-	case IIR::FieldType::i64: return "i64";
-	case IIR::FieldType::u64: return "u64";
-	case IIR::FieldType::f32: return "f32";
-	case IIR::FieldType::f64: return "f64";
-	case IIR::FieldType::str: return "char*";
-	case IIR::FieldType::ptr: return "ptr";
-	case IIR::FieldType::boolean: return "bool";
-	case IIR::FieldType::vec2: return "vec2";
-	case IIR::FieldType::vec3: return "vec3";
-	default: return "unk";
-	}
 }
 
 void Render(const Window& window) {
@@ -552,6 +486,17 @@ void Render(const Window& window) {
 	static bool showDemo = false;
 	if (ImGui::IsKeyPressed(ImGuiKey_F1)) showDemo = !showDemo;
 	if (showDemo) ImGui::ShowDemoWindow(&showDemo);
+
+	if (showDemo) {
+		ImGui::Begin("Debug stuff", &showDemo);
+
+		ImGui::Text("Structures: %lld", sm.structures.size());
+		for (auto& [k, v] : sm.structures) {
+			ImGui::Text("K: %s | %lldk's", k.c_str(), v.fields.size());
+		}
+
+		ImGui::End();
+	}
 #endif
 
 	ImGui::ToastSystem::RenderAll();

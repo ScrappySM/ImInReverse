@@ -47,6 +47,11 @@ namespace IIR {
 	/// The field type is simply used to index into the main type. It is not useful by itself as it does not contain the data of the memory.
 	/// </summary>
 	struct Field {
+		Field(FieldType fieldType, size_t offset, int size)
+			: fieldType(fieldType), offset(offset), size(size) {
+			strncpy_s(name, sizeof(name), "unnamed", _TRUNCATE);
+		}
+
 		FieldType fieldType = FieldType::unk;
 		size_t offset = 0;
 		int size = 8; // Size of field in bytes.
@@ -68,7 +73,6 @@ namespace IIR {
 			{ FieldType::unk, 0x38, 8 }
 		};
 
-		std::string name = "unnamed";
 		std::vector<uint8_t> mem;
 		uintptr_t baseAddr = 0;
 		size_t size = 64;
@@ -77,9 +81,9 @@ namespace IIR {
 			this->mem.resize(size);
 		}
 
-		MemoryData* GetFieldData(const Field& field) {
-			if (field.offset + field.size > mem.size()) return nullptr;
-			return reinterpret_cast<MemoryData*>(mem.data() + field.offset);
+        MemoryData* GetFieldData(const Field& field) const {  
+           if (field.offset + field.size > mem.size()) return nullptr;  
+           return reinterpret_cast<MemoryData*>(const_cast<uint8_t*>(mem.data()) + field.offset);  
 		}
 
 		void SplitField(size_t index, int targetBytes) {
@@ -102,7 +106,7 @@ namespace IIR {
 					this->HalfField(index + 1);
 				}
 
-				// Update the references
+					// Update the references
 				field = this->fields.at(index);
 				nextField = this->fields.at(index + 1);
 			}
@@ -166,8 +170,8 @@ namespace IIR {
 		void Lock() { memMutex.lock(); }
 		void Unlock() { memMutex.unlock(); }
 
-		std::vector<Structure> structures = {{}};
-		Structure& structure = structures[0];
+		std::unordered_map<std::string, Structure> structures = { { "Unnamed", {} } };
+		std::pair<std::string, Structure> structure = *structures.begin();
 
 	private:
 		StructureManager() = default;
@@ -204,12 +208,12 @@ namespace IIR {
 				}
 
 				this->Lock();
-				for (auto& structure : this->structures) {
+				for (auto& [k, structure] : this->structures) {
 					SIZE_T sizeRead = 0;
 					BOOL success = ReadProcessMemory(
 						handle,
 						reinterpret_cast<LPCVOID>(structure.baseAddr),
-						this->structure.mem.data(),
+						this->structure.second.mem.data(),
 						structure.size,
 						&sizeRead
 					);
