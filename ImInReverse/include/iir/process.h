@@ -8,6 +8,10 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
+#include <memory>
+#include <optional>
+
+#include "driver.h"
 
 #pragma comment(lib, "wbemuuid.lib")
 
@@ -26,11 +30,8 @@ namespace IIR {
 		bool OpenProcess(DWORD pid);
 		bool OpenProcess(const Process& process) { return OpenProcess(process.pid); }
 		std::optional<Process>& GetSelectedProcess() { return selectedProcess; }
-		bool IsProcessSuspended();
-		HANDLE GetHandle() { return this->processHandle; }
-
-		void SuspendProcess();
-		void ResumeProcess();
+		DriverManager* GetDriver() { return driver.get(); }
+		uintptr_t GetBaseAddress() const { return baseAddress; }
 
 		void CloseProcess();
 
@@ -49,7 +50,8 @@ namespace IIR {
 		void StartListening();
 		void PerformInitialScan();
 
-		HANDLE processHandle = nullptr;
+		std::unique_ptr<DriverManager> driver = nullptr;
+		uintptr_t baseAddress = 0;
 		std::optional<Process> selectedProcess = std::nullopt;
 
 		IWbemLocator* pLoc = nullptr;

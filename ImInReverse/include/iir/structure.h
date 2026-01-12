@@ -196,40 +196,24 @@ namespace IIR {
 				iterationCount++;
 				auto loopStartTime = std::chrono::steady_clock::now();
 
-				// Get process handle
-				auto handle = pm.GetHandle();
-				if (handle == nullptr) {
+				// Get driver
+				auto driver = pm.GetDriver();
+				if (driver == nullptr || !driver->isValid()) {
 					std::this_thread::sleep_for(std::chrono::milliseconds(100));
 					continue;
 				}
 
 				this->Lock();
 				for (auto& structure : this->structures) {
-					SIZE_T sizeRead = 0;
-					BOOL success = ReadProcessMemory(
-						handle,
-						reinterpret_cast<LPCVOID>(structure.baseAddr),
-						this->structure.mem.data(),
-						structure.size,
-						&sizeRead
-					);
-
-					if (!success || sizeRead != structure.size) {
-						DWORD errorCode = GetLastError();
-
-						// Format the error code as a string
-						LPVOID lpMsgBuf;
-						FormatMessage(
-							FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-							NULL,
-							errorCode,
-							MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-							(LPTSTR)&lpMsgBuf,
-							0, NULL);
-						std::string errorMsg = static_cast<char*>(lpMsgBuf);
-						LocalFree(lpMsgBuf);
-
-						spdlog::error("Failed to read memory: {}", errorMsg);
+					if (structure.baseAddr == 0) {
+						continue;
+					}
+					try {
+						// Read entire structure memory using a single IOCTL
+						driver->readMemory(structure.baseAddr, structure.mem.data(), structure.size);
+					}
+					catch (const DriverException& e) {
+						spdlog::error("Failed to read memory: {}", e.what());
 						shouldSleep = true;
 						continue;
 					}

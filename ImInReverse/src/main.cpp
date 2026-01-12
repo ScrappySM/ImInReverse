@@ -19,28 +19,6 @@ ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoDocking;
 //static IIR::Field* g_selectedField = nullptr;
 static size_t fieldIndex = 0;
 
-bool IsProbablyPointer(HANDLE process, uintptr_t value) {
-	if (value < 0x10000 || value % sizeof(uintptr_t) != 0)
-		return false;
-
-	MEMORY_BASIC_INFORMATION mbi;
-	if (VirtualQueryEx(process, (LPCVOID)value, &mbi, sizeof(mbi)) == 0)
-		return false;
-
-	// Check if memory is committed and readable
-	DWORD protect = mbi.Protect;
-	bool isReadable =
-		(protect & PAGE_READONLY) ||
-		(protect & PAGE_READWRITE) ||
-		(protect & PAGE_EXECUTE_READ) ||
-		(protect & PAGE_EXECUTE_READWRITE);
-
-	if (mbi.State != MEM_COMMIT || !isReadable)
-		return false;
-
-	return true;
-}
-
 void MenuBar(const Window& window, IIR::ProcessManager& pm) {
 	bool openAbout = false;
 	bool openProcPicker = false;
@@ -69,12 +47,6 @@ void MenuBar(const Window& window, IIR::ProcessManager& pm) {
 			ImGui::BeginDisabled(!selectedProcess.has_value());
 			if (ImGui::MenuItem("Close Process")) {
 				pm.CloseProcess();
-			}
-
-			static bool processSuspended = pm.IsProcessSuspended();
-			if (ImGui::MenuItem(processSuspended ? "Resume Process" : "Suspend Process")) {
-				processSuspended ? pm.ResumeProcess() : pm.SuspendProcess();
-				processSuspended = !processSuspended;
 			}
 			ImGui::EndDisabled();
 
@@ -323,11 +295,12 @@ void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsMan
 			// Extremely basic parser for now, just try to convert
 			try {
 				if (addressBuf[0] == '+') {
-					size_t ptr = std::stoll(&addressBuf[1], nullptr, 16);
-					HMODULE hMods[1024]; DWORD cbNeeded;
-					if (EnumProcessModulesEx(IIR::ProcessManager::GetInstance().GetHandle(), hMods, sizeof(hMods), &cbNeeded, LIST_MODULES_ALL)) {
-						structure.baseAddr = ptr + reinterpret_cast<uintptr_t>(hMods[0]);
+					const uintptr_t base = pm.GetBaseAddress();
+					if (base == 0) {
+						spdlog::error("No kernel base address available (select a process first)");
 					}
+					size_t off = std::stoll(&addressBuf[1], nullptr, 16);
+					structure.baseAddr = base + off;
 				}
 				else {
 					size_t ptr = std::stoll(addressBuf, nullptr, 16);
@@ -417,13 +390,6 @@ void MemoryPane(const Window& window, IIR::StructureManager& sm, IIR::OptionsMan
 					ImGui::PopStyleVar();
 
 					ImGui::SameLine();
-
-					if (field.size == sizeof(uintptr_t) && IsProbablyPointer(pm.GetHandle(), data->u64)) {
-						ImGui::SameLine();
-						ImGui::TextColored(om.offsetColour, "->");
-						ImGui::SameLine();
-						ImGui::ColoredSelectableText(om.offsetColour, "##fieldPointer", "%llX", data->u64);
-					}
 				}
 				else {
 					ImGui::SameLine();

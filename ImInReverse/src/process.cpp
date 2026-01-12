@@ -60,7 +60,7 @@ public:
 
 					// if it was the selected process, close it and clear the selection
 					if (manager->selectedProcess && manager->selectedProcess->pid == p.pid) {
-						spdlog::info("Selected process exited, closing handle");
+						spdlog::info("Selected process exited, closing driver");
 
 						manager->CloseProcess();
 						manager->selectedProcess = std::nullopt;
@@ -180,32 +180,66 @@ ProcessManager& ProcessManager::GetInstance() {
 
 bool ProcessManager::OpenProcess(DWORD pid) {
 	CloseProcess();
-	processHandle = ::OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-	if (!processHandle) {
-		spdlog::error("Failed to open process with PID: {}", pid);
+	
+	try {
+		driver = std::make_unique<DriverManager>("colonelLink");
+		
+		if (!driver->isValid()) {
+			spdlog::error("Failed to initialize driver");
+			driver.reset();
+			return false;
+		}
+		
+		// Store the selected process first
+		{
+			std::lock_guard<std::mutex> Lock(processMtx);
+			auto it = std::find_if(processes.begin(), processes.end(), [pid](const Process& p) {
+				return p.pid == pid;
+			});
+			if (it != processes.end()) {
+				selectedProcess = *it;
+			}
+			else {
+				selectedProcess = std::nullopt;
+			}
+		}
+		
+		if (!selectedProcess) {
+			spdlog::error("Process with PID {} not found", pid);
+			driver.reset();
+			return false;
+		}
+		
+		// Attach to process using driver (kernel-mode base address)
+		uintptr_t kmBase = 0;
+		auto status = driver->attachToProcess(selectedProcess->name, false, &kmBase);
+		if (status != DriverStatus::Success) {
+			spdlog::error("Failed to attach to process '{}': {}", 
+				selectedProcess->name, DriverException::getStatusMessage(status));
+			driver.reset();
+			baseAddress = 0;
+			selectedProcess = std::nullopt;
+			return false;
+		}
+
+		baseAddress = kmBase;
+		spdlog::info("Kernel base for '{}' = 0x{:X}", selectedProcess->name, baseAddress);
+		
+		spdlog::debug("Attached to process '{}' with PID: {}", selectedProcess->name, pid);
+		return true;
+	}
+	catch (const DriverException& e) {
+		spdlog::error("Driver exception: {}", e.what());
+		driver.reset();
+		selectedProcess = std::nullopt;
 		return false;
 	}
-
-	// Store the selected process
-	std::lock_guard<std::mutex> Lock(processMtx);
-	auto it = std::find_if(processes.begin(), processes.end(), [pid](const Process& p) {
-		return p.pid == pid;
-		});
-	if (it != processes.end()) {
-		selectedProcess = *it;
-	}
-	else {
-		selectedProcess = std::nullopt;
-	}
-	spdlog::debug("Opened process with PID: {}", pid);
-
-	return processHandle != nullptr;
 }
 
 void ProcessManager::CloseProcess() {
-	if (processHandle) {
-		CloseHandle(processHandle);
-		processHandle = nullptr;
+	if (driver) {
+		driver.reset();
+		baseAddress = 0;
 		selectedProcess = std::nullopt;
 	}
 }
@@ -215,98 +249,4 @@ const std::vector<Process>& ProcessManager::GetProcesses() {
 	return processes;
 }
 
-bool ProcessManager::IsProcessSuspended() {
-    if (!processHandle) {
-        spdlog::error("Invalid process handle");
-        return false;
-    }
 
-    // Iterate through all threads of the process
-    THREADENTRY32 te32;
-    te32.dwSize = sizeof(THREADENTRY32);
-
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (hSnapshot == INVALID_HANDLE_VALUE) {
-        spdlog::error("Failed to create snapshot of process threads");
-        return false;
-    }
-
-    BOOL foundSuspended = false;
-
-    // Loop through the threads
-    if (Thread32First(hSnapshot, &te32)) {
-        do {
-            if (te32.th32OwnerProcessID == GetProcessId(processHandle)) {
-                HANDLE hThread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, te32.th32ThreadID);
-                if (hThread != NULL) {
-                    DWORD suspendCount = SuspendThread(hThread);
-                    if (suspendCount == -1) {
-                        spdlog::error("Failed to suspend thread {}", te32.th32ThreadID);
-                    } else if (suspendCount > 0) {
-                        // The thread was suspended
-                        foundSuspended = true;
-                    }
-                    // Resume the thread after checking
-                    ResumeThread(hThread);
-                    CloseHandle(hThread);
-                }
-            }
-        } while (Thread32Next(hSnapshot, &te32));
-    }
-
-    CloseHandle(hSnapshot);
-
-    return foundSuspended;
-}
-
-void ProcessManager::SuspendProcess() {
-	if (!processHandle) return;
-
-	// Suspend the entire process (processHandle is a handle to the process)
-	HANDLE hThreadSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-	if (hThreadSnap == INVALID_HANDLE_VALUE) {
-		spdlog::error("Failed to create thread snapshot");
-		return;
-	}
-
-	THREADENTRY32 te;
-	te.dwSize = sizeof(THREADENTRY32);
-	if (Thread32First(hThreadSnap, &te)) {
-		do {
-			if (te.th32OwnerProcessID == GetProcessId(processHandle)) {
-				HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-				if (hThread) {
-					SuspendThread(hThread);
-					CloseHandle(hThread);
-				}
-			}
-		} while (Thread32Next(hThreadSnap, &te));
-	}
-	CloseHandle(hThreadSnap);
-	spdlog::debug("Suspended process with PID: {}", selectedProcess->pid);
-}
-
-void ProcessManager::ResumeProcess() {
-	if (!processHandle) return;
-	// Resume the entire process (processHandle is a handle to the process)
-	HANDLE hThreadSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-	if (hThreadSnap == INVALID_HANDLE_VALUE) {
-		spdlog::error("Failed to create thread snapshot");
-		return;
-	}
-	THREADENTRY32 te;
-	te.dwSize = sizeof(THREADENTRY32);
-	if (Thread32First(hThreadSnap, &te)) {
-		do {
-			if (te.th32OwnerProcessID == GetProcessId(processHandle)) {
-				HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-				if (hThread) {
-					ResumeThread(hThread);
-					CloseHandle(hThread);
-				}
-			}
-		} while (Thread32Next(hThreadSnap, &te));
-	}
-	CloseHandle(hThreadSnap);
-	spdlog::debug("Resumed process with PID: {}", selectedProcess->pid);
-}
